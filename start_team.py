@@ -1,0 +1,86 @@
+"""
+start_team.py
+-------------
+Cross-platform launcher that starts a full team of 11 nn_client agents.
+Works on Windows, Linux, and macOS (unlike the bash shell script).
+
+Usage:
+    python start_team.py
+    python start_team.py --team RedTeam --robot T1
+    python start_team.py --team BlueTeam --robot T1 --host 192.168.1.10
+
+All 11 agents start in separate processes, each with its own CSV log file.
+Press Ctrl+C to stop all agents cleanly.
+"""
+
+import argparse
+import os
+import signal
+import subprocess
+import sys
+import time
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Launch a full team of 11 NN agents for RCSSServerMJ.'
+    )
+    parser.add_argument('-s', '--host',  type=str, default='127.0.0.1',
+                        help='Server IP address (default: 127.0.0.1)')
+    parser.add_argument('-p', '--port',  type=int, default=60000,
+                        help='Server port (default: 60000)')
+    parser.add_argument('-t', '--team',  type=str, default='Test',
+                        help='Team name (default: Test)')
+    parser.add_argument('-r', '--robot', type=str, default='T1',
+                        choices=['ant', 'T1'],
+                        help='Robot model (default: T1)')
+    parser.add_argument('--delay', type=float, default=0.2,
+                        help='Delay in seconds between spawning each agent (default: 0.2)')
+    args = parser.parse_args()
+
+    python = sys.executable
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nn_client.py')
+
+    base_cmd = [
+        python, script,
+        '--host',  args.host,
+        '--port',  str(args.port),
+        '--team',  args.team,
+        '--robot', args.robot,
+    ]
+
+    processes: list[subprocess.Popen] = []
+
+    print(f'[INFO] Starting team "{args.team}" — 11 x {args.robot} robots')
+    print(f'[INFO] Server: {args.host}:{args.port}')
+    print('[INFO] Press Ctrl+C to stop all agents.\n')
+
+    for player_no in range(1, 12):
+        cmd = base_cmd + ['--player_no', str(player_no)]
+        proc = subprocess.Popen(cmd)
+        processes.append(proc)
+        print(f'[INFO] Agent {player_no:>2}/11 started  (PID {proc.pid})')
+        time.sleep(args.delay)   # stagger spawns so the server isn't overwhelmed
+
+    print(f'\n[INFO] All 11 agents running. Waiting for them to finish...')
+
+    # ── Graceful shutdown on Ctrl+C ──────────────────────────────────────────
+    def _shutdown(sig, frame):
+        print('\n[INFO] Ctrl+C received — stopping all agents...')
+        for p in processes:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+
+    signal.signal(signal.SIGINT, _shutdown)
+
+    # Wait for all processes to exit
+    for p in processes:
+        p.wait()
+
+    print('[INFO] All agents stopped.')
+
+
+if __name__ == '__main__':
+    main()
