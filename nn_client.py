@@ -646,4 +646,19 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--host',      type=str, default='127.0.0.1')
     parser.add_argument('-p', '--port',      type=int, default=60000)
     parser.add_argument('-t', '--team',      type=str, default='Test')
- 
+    parser.add_argument('-n', '--player_no', type=int, default=1)
+    parser.add_argument('-r', '--robot',     type=str, default=robots[0], choices=robots)
+    parser.add_argument('--default-role',    type=str, default='attacker',
+                        choices=['attacker', 'supporter'],
+                        help='Starting role when no teammate is visible (default: attacker)')
+    args = parser.parse_args()
+
+    client = Client(args.host, args.port, args.team, args.player_no, args.robot,
+                    default_role=args.default_role)
+
+    def signal_handler(sig, frame):
+        del sig, frame
+        client.shutdown()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    client.run()
