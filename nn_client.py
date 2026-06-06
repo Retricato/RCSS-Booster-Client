@@ -87,7 +87,7 @@ class Client:
     HEAD_YAW_IDX   = 0
     HEAD_PITCH_IDX = 1
 
-    def __init__(self, host, port, team, player_no, model_name=None):
+    def __init__(self, host, port, team, player_no, model_name=None, default_role='attacker'):
         self._host       = host
         self._port       = port
         self._model_name = 'ant' if model_name is None else model_name
@@ -125,7 +125,8 @@ class Client:
         self._teammate_world_pos = {}   # player_no -> world np.ndarray
         self._teammate_last_seen = {}   # player_no -> cycle
         self._robot_world_pos    = None
-        self._role               = 'attacker'
+        self._default_role       = default_role   # role when no teammate visible
+        self._role               = default_role
 
         # misc
         self._cycle      = 0
@@ -174,7 +175,7 @@ class Client:
         self._teammate_world_pos = {}
         self._teammate_last_seen = {}
         self._robot_world_pos    = None
-        self._role               = 'attacker'
+        self._role               = self._default_role
 
     @staticmethod
     def _wrap_to_pi(x):
@@ -288,13 +289,18 @@ class Client:
         other robot.  The ball is in my cell  <=>  my distance to the ball
         is less than or equal to every teammate's distance.
 
-        Returns 'attacker' if I'm the closest, 'supporter' otherwise.
-        Defaults to 'attacker' when world data is unavailable.
+        When no teammate is visible the robot falls back to _default_role
+        (set at launch via --default-role). This prevents two robots both
+        rushing the ball before they can see each other.
+
+        Returns 'attacker' if closest, 'supporter' otherwise.
         """
         if self._ball_world_pos is None or robot_world_pos is None:
-            return 'attacker'
+            return self._default_role
         if not self._teammate_world_pos:
-            return 'attacker'
+            # No teammate in view — hold the assigned starting role until we
+            # can actually see a teammate and compare distances properly.
+            return self._default_role
 
         ball_xy = self._ball_world_pos[:2]
         my_dist = float(np.linalg.norm(ball_xy - robot_world_pos[:2]))
@@ -640,15 +646,4 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--host',      type=str, default='127.0.0.1')
     parser.add_argument('-p', '--port',      type=int, default=60000)
     parser.add_argument('-t', '--team',      type=str, default='Test')
-    parser.add_argument('-n', '--player_no', type=int, default=1)
-    parser.add_argument('-r', '--robot',     type=str, default=robots[0], choices=robots)
-    args = parser.parse_args()
-
-    client = Client(args.host, args.port, args.team, args.player_no, args.robot)
-
-    def signal_handler(sig, frame):
-        del sig, frame
-        client.shutdown()
-
-    signal.signal(signal.SIGINT, signal_handler)
-    client.run()
+ 
