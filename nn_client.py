@@ -27,14 +27,14 @@ HEAD_YAW_KP              = 0.6
 HEAD_PITCH_KP            = 0.6
 HEAD_YAW_SIGN            = +1
 HEAD_PITCH_SIGN          = -1
-HEAD_YAW_LIMIT_DEG       = (-90.0, 90.0)
-HEAD_PITCH_LIMIT_DEG     = (-20.0, 70.0)
-HEAD_SWEEP_DEG_PER_CYCLE = 4.0
+HEAD_YAW_LIMIT_RAD       = (-np.pi/2, np.pi/2)        # ±90°
+HEAD_PITCH_LIMIT_RAD     = (np.deg2rad(-20.0), np.deg2rad(70.0))  # -20° to 70°
+HEAD_SWEEP_RAD_PER_CYCLE = np.deg2rad(4.0)             # 4° per cycle
 
 # Ball following
 ENABLE_BALL_FOLLOWING = True
 FOLLOW_FORWARD_SPEED  = 1.0
-STEER_KP              = 1.0 / 45.0   # degrees -> yaw goal velocity
+STEER_KP              = 1.0 / (np.pi / 4)  # radians -> yaw goal velocity (π/4 rad = 45°)
 
 # Ball persistence
 BALL_CLOSE_DIST_M       = 2.0
@@ -190,11 +190,11 @@ class Client:
 
     # ------------------------------------------------------------------ vision
     @staticmethod
-    def _polar_to_cartesian(dist, az_deg, el_deg):
-        az = np.deg2rad(az_deg); el = np.deg2rad(el_deg)
-        return (float(dist*np.cos(el)*np.cos(az)),
-                float(dist*np.cos(el)*np.sin(az)),
-                float(dist*np.sin(el)))
+    def _polar_to_cartesian(dist, az_rad, el_rad):
+        """Input angles must be in radians (already converted by _parse_ball/_parse_players)."""
+        return (float(dist*np.cos(el_rad)*np.cos(az_rad)),
+                float(dist*np.cos(el_rad)*np.sin(az_rad)),
+                float(dist*np.sin(el_rad)))
 
     @staticmethod
     def _extract_balanced(s, start):
@@ -208,7 +208,10 @@ class Client:
 
     def _parse_ball(self, msg):
         m = re.search(r'\(B\s+\(pol\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\)\)', msg)
-        return (float(m.group(1)), float(m.group(2)), float(m.group(3))) if m else None
+        # Convert server degrees to radians on the way in
+        return (float(m.group(1)),
+                float(np.deg2rad(float(m.group(2)))),
+                float(np.deg2rad(float(m.group(3))))) if m else None
 
     def _parse_goal(self, msg):
         m1 = re.search(r'\(G1R\s+\(pol\s+(-?[\d.]+)\s+(-?[\d.]+)\s+-?[\d.]+\)\)', msg)
@@ -236,8 +239,11 @@ class Client:
             if not pols: continue
             arr = np.array(pols, dtype=np.float32)
             d, az, el = arr.mean(axis=0)
+            # Convert server degrees to radians on the way in
             players.append({'team': team, 'id': pid,
-                            'distance': float(d), 'azimuth': float(az), 'elevation': float(el)})
+                            'distance': float(d),
+                            'azimuth':  float(np.deg2rad(az)),
+                            'elevation': float(np.deg2rad(el))})
         return players
 
     # ------------------------------------------------------------------ head
@@ -248,13 +254,14 @@ class Client:
             self._head_pitch_target = cur_pitch + HEAD_PITCH_SIGN * HEAD_PITCH_KP * el
             self._head_scan_angle   = self._head_yaw_target
         elif ENABLE_SEARCH and self._cycles_since_ball > LOST_BALL_CYCLES:
-            self._head_scan_angle += self._search_dir * HEAD_SWEEP_DEG_PER_CYCLE
-            if   self._head_scan_angle >  80.0: self._search_dir = -1.0
-            elif self._head_scan_angle < -80.0: self._search_dir =  1.0
+            self._head_scan_angle += self._search_dir * HEAD_SWEEP_RAD_PER_CYCLE
+            _sweep_limit = np.deg2rad(80.0)  # ±80° in radians
+            if   self._head_scan_angle >  _sweep_limit: self._search_dir = -1.0
+            elif self._head_scan_angle < -_sweep_limit: self._search_dir =  1.0
             self._head_yaw_target   = self._head_scan_angle
-            self._head_pitch_target = -40.0
-        self._head_yaw_target   = float(np.clip(self._head_yaw_target,   *HEAD_YAW_LIMIT_DEG))
-        self._head_pitch_target = float(np.clip(self._head_pitch_target, *HEAD_PITCH_LIMIT_DEG))
+            self._head_pitch_target = np.deg2rad(-40.0)  # look down while searching
+        self._head_yaw_target   = float(np.clip(self._head_yaw_target,   *HEAD_YAW_LIMIT_RAD))
+        self._head_pitch_target = float(np.clip(self._head_pitch_target, *HEAD_PITCH_LIMIT_RAD))
 
     # ------------------------------------------------------------------ multi-robot
     def _update_teammates(self, players, robot_world_pos, robot_rotation):
@@ -333,7 +340,7 @@ class Client:
         dist_to_support = float(np.sqrt(dx*dx + dy*dy))
         if dist_to_support < 1.0:
             return np.array([0.0, 0.0, 0.0], dtype=np.float32)
-        body_ang = float(np.rad2deg(np.arctan2(dy, dx)))
+        body_ang = float(np.arctan2(dy, dx))  # radians; STEER_KP = 1/(π/4)
         yaw_vel  = float(np.clip(body_ang * STEER_KP, -1.0, 1.0))
         return np.array([FOLLOW_FORWARD_SPEED, 0.0, yaw_vel], dtype=np.float32)
 
@@ -448,8 +455,8 @@ class Client:
                 jp  = np.deg2rad(jpd).astype(np.float32)
                 jvd = np.array([h['vx'] for h in perception_data['HJ']], dtype=np.float32)
                 jv  = np.deg2rad(jvd).astype(np.float32)
-                cur_head_yaw   = float(jpd[self.HEAD_YAW_IDX])
-                cur_head_pitch = float(jpd[self.HEAD_PITCH_IDX])
+                cur_head_yaw   = float(jp[self.HEAD_YAW_IDX])   # radians (from jp)
+                cur_head_pitch = float(jp[self.HEAD_PITCH_IDX])  # radians
                 s_jp  = (jp - self.joint_nominal_position) / 3.14
                 s_jv  = jv / 100.0
                 s_pa  = self.previous_action / 10.0
@@ -588,8 +595,9 @@ class Client:
 
                 tj_deg = np.rad2deg(self.joint_nominal_position + self.scaling_factor * nn_action)
                 if ENABLE_HEAD_TRACKING:
-                    tj_deg[self.HEAD_YAW_IDX]   = self._head_yaw_target
-                    tj_deg[self.HEAD_PITCH_IDX] = self._head_pitch_target
+                    # Targets are in radians; motor command protocol uses degrees
+                    tj_deg[self.HEAD_YAW_IDX]   = np.rad2deg(self._head_yaw_target)
+                    tj_deg[self.HEAD_PITCH_IDX] = np.rad2deg(self._head_pitch_target)
 
                 motors  = self.ROBOT_MOTORS[self._model_name]
                 msg_out = ''.join(f'({m} {q:.2f} 0.0 {self.p_gain:.2f} {self.d_gain:.2f} 0.0)'
